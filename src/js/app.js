@@ -6,7 +6,7 @@ import { processPhoto, blobUrl, forgetUrl } from './photos.js';
 import { esc, renderMarkdown, download, money, debounce } from './util.js';
 import * as ex from './export.js';
 
-export const VERSION = '0.1.0';
+export const VERSION = '0.2.0';
 
 // ---------------------------------------------------------------- state
 const S = {
@@ -28,12 +28,87 @@ async function loadTemplates() {
   S.templates = [...BUILTIN_TEMPLATES, ...custom.filter((t) => !t.deleted).sort((a, b) => a.name.localeCompare(b.name))];
   S.tplById = Object.fromEntries(S.templates.map((t) => [t.id, t]));
 }
-async function loadItems() { S.items = (await db.getAll('items')).filter((i) => !i.deleted); }
+async function loadItems() { S.items = (await db.getAll('items')).filter((i) => !i.deleted); await ensureSacks(); }
+
+// ---------------------------------------------------------------- Sacks (separate collections)
+const DEFAULT_SACK = 'sack-default';
+async function ensureSacks() {
+  let sacks = await db.getMeta('sacks', null);
+  let changed = false;
+  if (!Array.isArray(sacks) || !sacks.length) { sacks = [{ id: DEFAULT_SACK, name: 'My Sack', icon: '👜' }]; changed = true; }
+  // any item pointing at an unknown Sack (e.g. after restoring a backup) gets a Sack so it never disappears
+  for (const it of S.items) {
+    if (!it.sackId) it.sackId = DEFAULT_SACK;
+    if (!sacks.some((k) => k.id === it.sackId)) {
+      sacks.push({ id: it.sackId, name: it.sackId === DEFAULT_SACK ? 'My Sack' : 'Restored Sack', icon: '👜' }); changed = true;
+    }
+  }
+  if (changed) await db.setMeta('sacks', sacks);
+  S.sacks = sacks;
+  if (S.prefs.sack && !sacks.some((k) => k.id === S.prefs.sack)) { S.prefs.sack = ''; savePrefs(); }
+}
+const sackOf = (id) => S.sacks.find((k) => k.id === (id || DEFAULT_SACK)) || S.sacks[0];
+const currentSack = () => (S.prefs.sack ? sackOf(S.prefs.sack) : null);
+const sackCount = (id) => S.items.filter((i) => (i.sackId || DEFAULT_SACK) === id).length;
+
+function openSackSwitcher() {
+  const cur = S.prefs.sack;
+  const p = openSheet(`<h2>Your Sacks</h2>
+    <div class="tpl-list">
+      <a class="tile ${!cur ? 'on' : ''}" data-s=""><span class="ico">🎒</span><div class="grow"><div class="nm">All Sacks</div><div class="sub">${S.items.length} item${S.items.length === 1 ? '' : 's'}</div></div>${!cur ? '<span>✓</span>' : ''}</a>
+      ${S.sacks.map((k) => `<div class="tile" data-s="${esc(k.id)}"><span class="ico">${esc(k.icon || '👜')}</span>
+        <div class="grow"><div class="nm">${esc(k.name)}</div><div class="sub">${sackCount(k.id)} item${sackCount(k.id) === 1 ? '' : 's'}</div></div>
+        ${k.id === cur ? '<span>✓</span>' : ''}<button class="icon-btn" data-edit="${esc(k.id)}" aria-label="Edit ${esc(k.name)}" style="color:var(--muted)">✏️</button></div>`).join('')}
+    </div>
+    <button class="btn primary block" id="newSack">＋ New Sack</button>`);
+  p.onclick = (e) => {
+    const ed = e.target.closest('[data-edit]');
+    if (ed) { e.stopPropagation(); editSack(ed.dataset.edit); return; }
+    const t = e.target.closest('[data-s]');
+    if (t) { S.prefs.sack = t.dataset.s; S.prefs.path = ''; S.limit = 150; savePrefs(); closeSheet(); location.hash === '#/' || !location.hash ? renderSack() : (location.hash = '#/'); }
+  };
+  $('#newSack', p).onclick = () => editSack(null);
+}
+
+function editSack(id) {
+  const k = id ? sackOf(id) : { id: db.uid(), name: '', icon: '👜' };
+  const n = id ? sackCount(id) : 0;
+  const others = S.sacks.filter((x) => x.id !== k.id);
+  const p = openSheet(`<h2>${id ? 'Edit Sack' : 'New Sack'}</h2>
+    <div class="row"><label class="field" style="width:84px"><span>Icon</span><input type="text" id="sIcon" value="${esc(k.icon)}" maxlength="4" style="text-align:center;font-size:22px"></label>
+    <label class="field grow"><span>Name</span><input type="text" id="sName" value="${esc(k.name)}" placeholder="e.g. Miranda's Molds"></label></div>
+    <div class="row"><button class="btn grow" id="sCancel">Cancel</button><button class="btn primary grow" id="sSave">Save</button></div>
+    ${id && others.length ? `<hr style="border:0;border-top:1px solid var(--line);margin:16px 0">
+      ${n ? `<label class="field"><span>Move its ${n} item${n > 1 ? 's' : ''} to</span><select id="sMoveTo">${others.map((o) => `<option value="${esc(o.id)}">${esc(o.icon)} ${esc(o.name)}</option>`).join('')}</select></label>` : ''}
+      <button class="btn danger block" id="sDel">🗑 Delete this Sack${n ? ' (items are moved, not deleted)' : ''}</button>` : ''}`);
+  $('#sName', p).focus();
+  $('#sCancel', p).onclick = openSackSwitcher;
+  $('#sSave', p).onclick = async () => {
+    k.name = $('#sName', p).value.trim(); k.icon = $('#sIcon', p).value.trim() || '👜';
+    if (!k.name) { toast('Give the Sack a name'); return; }
+    const list = id ? S.sacks.map((x) => (x.id === k.id ? k : x)) : [...S.sacks, k];
+    await db.setMeta('sacks', list); S.sacks = list;
+    if (!id) { S.prefs.sack = k.id; S.prefs.path = ''; savePrefs(); }
+    closeSheet(); toast(id ? 'Sack saved' : `“${k.name}” created`);
+    route();
+  };
+  $('#sDel', p)?.addEventListener('click', async () => {
+    const to = $('#sMoveTo', p)?.value;
+    if (!(await confirmSheet(`Delete Sack “${k.name}”?${n ? ` Its ${n} item(s) move to “${sackOf(to).name}”.` : ''}`, 'Delete Sack', true))) return;
+    for (const it of S.items.filter((i) => (i.sackId || DEFAULT_SACK) === k.id)) { it.sackId = to; await db.put('items', it); }
+    const list = S.sacks.filter((x) => x.id !== k.id);
+    await db.setMeta('sacks', list); S.sacks = list;
+    if (S.prefs.sack === k.id) { S.prefs.sack = ''; savePrefs(); }
+    await loadItems(); toast('Sack deleted'); route();
+  });
+}
 const tplOf = (item) => S.tplById[item.templateId] || { id: item.templateId, name: 'Unknown template', icon: '❔', fields: [] };
 
 // ---------------------------------------------------------------- chrome helpers
-function chrome({ title, back = false, nav = '', actions = [] }) {
-  $('#title').textContent = title;
+function chrome({ title, back = false, nav = '', actions = [], switcher = false }) {
+  const tEl = $('#title');
+  tEl.innerHTML = switcher ? `<button class="title-btn" id="sackBtn">${esc(title)} <span class="caret">▾</span></button>` : esc(title);
+  if (switcher) $('#sackBtn').onclick = openSackSwitcher;
   $('#backBtn').hidden = !back;
   const box = $('#topActions');
   box.innerHTML = '';
@@ -126,6 +201,7 @@ function computeVisible() {
   const q = S.q.trim().toLowerCase();
   const words = q ? q.split(/\s+/) : [];
   let list = S.items.filter((it) => {
+    if (S.prefs.sack && (it.sackId || DEFAULT_SACK) !== S.prefs.sack) return false;
     if (f.tpl && it.templateId !== f.tpl) return false;
     if (f.cond && it.condition !== f.cond) return false;
     if (f.loc && (it.location || '') !== f.loc) return false;
@@ -197,7 +273,9 @@ function activeFilterCount() {
 }
 
 function renderSack() {
-  chrome({ title: 'The Sack', nav: 'sack', actions: [{ icon: '⬇️', label: 'Export', onClick: () => (location.hash = '#/more') }] });
+  const cs = currentSack();
+  chrome({ title: cs ? `${cs.icon} ${cs.name}` : (S.sacks.length > 1 ? '🎒 All Sacks' : 'The Sack'), nav: 'sack', switcher: true,
+    actions: [{ icon: '⬇️', label: 'Export', onClick: () => (location.hash = '#/more') }] });
   const p = S.prefs;
   const tpl = p.f.tpl ? S.tplById[p.f.tpl] : null;
   const fieldSorts = tpl ? tpl.fields.map((f) => [`f:${f.key}`, `Sort: ${f.label}`]) : [];
@@ -259,10 +337,11 @@ function renderAlbum() {
   const list = computeVisible();
   S.visible = list;
   const album = $('#album');
-  $('#count').textContent = `${list.length} of ${S.items.length} item${S.items.length === 1 ? '' : 's'}`;
+  const inSack = S.prefs.sack ? sackCount(S.prefs.sack) : S.items.length;
+  $('#count').textContent = `${list.length} of ${inSack} item${inSack === 1 ? '' : 's'}`;
 
-  if (!S.items.length) {
-    album.innerHTML = `<div class="empty"><div class="big">👜</div><h2>Your Sack is empty</h2>
+  if (!S.items.length || (S.prefs.sack && !sackCount(S.prefs.sack))) {
+    album.innerHTML = `<div class="empty"><div class="big">👜</div><h2>${esc(currentSack()?.name || 'Your Sack')} is empty</h2>
       <p>Tap <b>＋ Add</b> to catalog your first item.<br>Pick a template like Ceramic Molds, Coins or Trading Cards.</p>
       <a class="btn primary" href="#/new">＋ Add first item</a></div>`;
     return;
@@ -376,6 +455,7 @@ async function renderItem(id) {
   const tplRows = t.fields.filter((f) => it.fields?.[f.key] !== '' && it.fields?.[f.key] != null)
     .map((f) => `<dt>${esc(f.label)}</dt><dd>${f.type === 'longtext' ? renderMarkdown(it.fields[f.key]) : fmt(f, it.fields[f.key])}</dd>`).join('');
   const base = [
+    ...(S.sacks.length > 1 ? [['Sack', `${esc(sackOf(it.sackId).icon)} ${esc(sackOf(it.sackId).name)}`]] : []),
     ['SKU', esc(it.sku)], ['Quantity', esc(it.quantity ?? 1)], ['Condition', esc(it.condition)], ['Location', esc(it.location)],
     ['Collection', esc(it.collection)], ['Cost', money(it.cost)], ['Price', money(it.price)],
     ['Tags', (it.tags || []).map((x) => `<span class="badge">${esc(x)}</span>`).join('')],
@@ -444,7 +524,7 @@ async function renderEdit(id, query = new URLSearchParams()) {
     try { carry = query.get('next') ? JSON.parse(sessionStorage.getItem('squire.carry') || '{}') : {}; } catch { /* ignore */ }
     const tplId = query.get('tpl') || from?.templateId;
     item = {
-      id: db.uid(), templateId: tplId, name: '', sku: '', quantity: 1, condition: '', location: '', collection: '', cost: '', price: '',
+      id: db.uid(), sackId: S.prefs.sack || S.sacks[0]?.id || DEFAULT_SACK, templateId: tplId, name: '', sku: '', quantity: 1, condition: '', location: '', collection: '', cost: '', price: '',
       tags: [], listOnline: true, wooCategory: '', description: '', fields: {}, photoIds: [], createdAt: Date.now(),
       ...(from ? { ...structuredClone(from), id: db.uid(), name: from.name + ' (copy)', sku: '', photoIds: [], createdAt: Date.now() } : {}),
       ...carry,
@@ -476,6 +556,7 @@ async function renderEdit(id, query = new URLSearchParams()) {
           <p class="muted small" style="margin:8px 0 0">First photo is the cover. Use ◀ ▶ to reorder.</p>
         </div>
         <div class="card">
+          ${S.sacks.length > 1 ? `<label class="field"><span>Sack</span><select name="sackId">${S.sacks.map((k) => `<option value="${esc(k.id)}" ${k.id === (item.sackId || DEFAULT_SACK) ? 'selected' : ''}>${esc(k.icon)} ${esc(k.name)}</option>`).join('')}</select></label>` : ''}
           <label class="field"><span>Template</span><select id="tplSel">${S.templates.map((x) => `<option value="${x.id}" ${x.id === item.templateId ? 'selected' : ''}>${x.icon} ${esc(x.name)}</option>`).join('')}</select></label>
           <label class="field"><span>Name</span><input type="text" name="name" value="${esc(item.name)}" placeholder="Leave blank to build from the details below"></label>
         </div>
@@ -577,6 +658,8 @@ async function renderEdit(id, query = new URLSearchParams()) {
     item.listOnline = fd.get('listOnline') === 'on';
     item.wooCategory = (fd.get('wooCategory') || '').trim();
     item.description = fd.get('description') || '';
+    if (fd.get('sackId')) item.sackId = fd.get('sackId');
+    if (!item.sackId) item.sackId = DEFAULT_SACK;
     const fields = {};
     for (const f of t.fields) {
       const el = form.querySelector(`[data-key="${f.key}"]`);
@@ -607,7 +690,7 @@ async function renderEdit(id, query = new URLSearchParams()) {
     S.prefs.lastTpl = item.templateId; savePrefs();
     dirty = false;
     if (next) {
-      const carry = { templateId: item.templateId, location: item.location, collection: item.collection, condition: item.condition, tags: item.tags, wooCategory: item.wooCategory, listOnline: item.listOnline };
+      const carry = { sackId: item.sackId, templateId: item.templateId, location: item.location, collection: item.collection, condition: item.condition, tags: item.tags, wooCategory: item.wooCategory, listOnline: item.listOnline };
       try { sessionStorage.setItem('squire.carry', JSON.stringify(carry)); } catch { /* ignore */ }
       toast(`Saved ${item.sku}. Ready for the next one.`);
       location.hash = `#/new?tpl=${item.templateId}&next=1&t=${Date.now()}`;
@@ -792,12 +875,14 @@ async function renderMore() {
   const est = await db.storageEstimate();
   const persisted = navigator.storage?.persisted ? await navigator.storage.persisted() : false;
   const photoCount = S.items.reduce((n, i) => n + (i.photoIds?.length || 0), 0);
-  const filtered = S.visible.length && S.visible.length !== S.items.length;
+  S.visible = computeVisible();
+  const filtered = S.visible.length !== S.items.length;
+  const viewName = currentSack() ? `${currentSack().name}${activeFilterCount() || S.q || S.prefs.path ? ' (filtered)' : ''}` : 'Current Sack view';
   const mb = (b) => (b / 1048576).toFixed(1) + ' MB';
 
   view.innerHTML = `
     <div class="card"><h2>⬇ Export</h2>
-      ${filtered ? `<label class="field"><span>What to export</span><select id="scope"><option value="view">Current Sack view (${S.visible.length} items)</option><option value="all">Everything (${S.items.length} items)</option></select></label>` : `<p class="muted small">Exports all ${S.items.length} items. Filter the Sack first to export just part of it.</p>`}
+      ${filtered ? `<label class="field"><span>What to export</span><select id="scope"><option value="view">${esc(viewName)} (${S.visible.length} items)</option><option value="all">Everything (${S.items.length} items)</option></select></label>` : `<p class="muted small">Exports all ${S.items.length} items. Filter the Sack first to export just part of it.</p>`}
       <div style="display:grid;gap:8px">
         <button class="btn primary" id="xWoo">🛒 WooCommerce (shop import)</button>
         <button class="btn" id="xCsv">📊 Spreadsheet (CSV — Excel, Google Sheets, eBay, Shopify)</button>
@@ -840,7 +925,7 @@ async function renderMore() {
   $('#xCsv').onclick = async () => { const r = await ex.exportCsv(scoped(), S.tplById); download(r.blob, r.filename); };
   $('#xPrint').onclick = async () => {
     toast('Preparing list…');
-    const blob = await ex.printList(scoped(), S.tplById, 'Squire inventory');
+    const blob = await ex.printList(scoped(), S.tplById, currentSack()?.name || 'Squire inventory');
     const url = URL.createObjectURL(blob);
     const w = window.open(url, '_blank');
     if (!w) download(blob, 'squire-inventory.html');

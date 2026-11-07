@@ -1,5 +1,5 @@
 // Offline cache for the app shell. Bump VERSION when files change.
-const VERSION = 'squire-v0.1.0';
+const VERSION = 'squire-v0.2.0';
 const SHELL = [
   './', 'index.html', 'manifest.webmanifest', 'css/app.css',
   'js/app.js', 'js/db.js', 'js/templates.js', 'js/photos.js', 'js/util.js', 'js/export.js', 'js/zip.js',

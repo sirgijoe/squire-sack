@@ -44,6 +44,9 @@ a { color: var(--primary); }
   background: var(--primary); color: var(--primary-ink);
 }
 .topbar h1 { font-size: 19px; margin: 0 0 0 8px; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.title-btn { border: 0; background: none; color: inherit; font: inherit; font-weight: 700; padding: 6px 8px; margin-left: -8px; border-radius: 10px; cursor: pointer; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.title-btn:active { background: rgba(255,255,255,.18); }
+.title-btn .caret { font-size: 14px; opacity: .8; }
 .topbar-actions { display: flex; gap: 4px; }
 .icon-btn {
   min-width: 44px; height: 44px; border: 0; border-radius: 12px; background: transparent; color: inherit;

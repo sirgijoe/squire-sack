@@ -15,6 +15,7 @@ It started as a way to catalog 3,000+ ceramic slip-casting molds for [Blooming L
 - **Templates**: 12 built-in (Ceramic Molds, Trading Cards, Coins, Stamps, Dolls & Figures, Comics, Vinyl & Media, Toys & Die-cast, Books, Antiques & Art, Jewelry & Watches, General Inventory), plus a builder for your own. Field types: text, long text, number, money, date, dropdown, yes/no, 1–5 rating, link. Templates export and import as files, so they can be shared.
 - **Photos**: as many as you need per item, taken with the camera or picked from the gallery. Includes a cover photo, captions, reordering, and a full-screen viewer with swipe and pinch-to-zoom. Photos are resized on save, so they stay sharp but small.
 - **Description blocks** with simple formatting: `**bold**`, `*italic*`, and `-` lists.
+- **Multiple Sacks**: keep separate collections (e.g. *Miranda's Molds* and *Joe's Coins*), each with its own album and exports. Tap the title to switch, or view *All Sacks* at once. Items can move between Sacks.
 - **The Sack (album view)** has grid, list and card layouts. You can sort by name, date, price, condition, location, SKU or any template field. Filters stack, grouping uses collapsible sections, and the search covers every field. Nested collections (`Molds/Christmas/Ornaments`) work like folders.
 - **Fast entry**: *Save + add next* carries the template, location, collection, condition and tags over to the next item. SKUs are created automatically (`MOLD-0001`). Leave the name blank and it is built from the details.
 - **Exports**
@@ -29,7 +30,8 @@ It started as a way to catalog 3,000+ ceramic slip-casting molds for [Blooming L
 
 | Phase | What |
 |---|---|
-| **0.1 (now)** | Web app: templates, items, photos, album, exports, backup |
+| 0.1 | Web app: templates, items, photos, album, exports, backup |
+| **0.2 (now)** | Multiple Sacks (separate collections) |
 | 0.2 | Native desktop app (Windows / macOS / Linux) via Tauri 2, with real file saving |
 | 0.3 | **Desktop ↔ phone sync** over home Wi-Fi with QR-code pairing. Full-size photos move to the desktop "home base" and the phone keeps thumbnails |
 | 0.4 | Android and iOS apps via Tauri 2 |
