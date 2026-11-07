@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="112" fill="#2f5d50"/>
+  <!-- sack body -->
+  <path d="M176 196c-52 40-84 98-84 152 0 70 66 104 164 104s164-34 164-104c0-54-32-112-84-152z" fill="#c9a46a"/>
+  <path d="M176 196c-52 40-84 98-84 152 0 70 66 104 164 104s164-34 164-104c0-54-32-112-84-152z" fill="none" stroke="#7a5a2b" stroke-width="10" stroke-linejoin="round"/>
+  <!-- gathered neck -->
+  <path d="M190 120c22 18 40 26 66 26s44-8 66-26l-10 76H200z" fill="#c9a46a" stroke="#7a5a2b" stroke-width="10" stroke-linejoin="round"/>
+  <!-- rope tie -->
+  <rect x="180" y="180" width="152" height="30" rx="15" fill="#b8892b" stroke="#7a5a2b" stroke-width="8"/>
+  <!-- shield emblem -->
+  <path d="M256 262l58 18v40c0 40-26 64-58 78-32-14-58-38-58-78v-40z" fill="#2f5d50" stroke="#f6f1e7" stroke-width="10" stroke-linejoin="round"/>
+  <path d="M256 290v84M226 322h60" stroke="#f6f1e7" stroke-width="10" stroke-linecap="round"/>
+</svg>
