@@ -73,8 +73,9 @@ main { padding: 12px; max-width: 1200px; margin: 0 auto; outline: none; }
 .grow { flex: 1; }
 .btn {
   min-height: 44px; padding: 0 16px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface);
-  cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 6px; text-decoration: none; color: var(--text); white-space: nowrap;
+  cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 6px; text-decoration: none; color: var(--text); text-align: center;
 }
+.row .btn { white-space: nowrap; }
 .btn.primary { background: var(--primary); border-color: var(--primary); color: var(--primary-ink); font-weight: 600; }
 .btn.accent { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
 .btn.danger { color: var(--danger); border-color: var(--danger); }
