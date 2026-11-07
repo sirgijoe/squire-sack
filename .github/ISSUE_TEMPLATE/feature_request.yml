@@ -1,0 +1,15 @@
+name: 💡 Feature request
+description: An idea to make Squire better
+labels: [enhancement]
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like Squire to do?
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: What would you use it for?
+      description: e.g. "I collect Hot Wheels and want to track..."

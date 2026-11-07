@@ -4,6 +4,8 @@
 
 *Keeper of your armor, shield, sword — and all your knick knacks.*
 
+> **🧪 Beta.** Squire is free to use and works today, but it's still growing. Your data stays on your device (there's no sync yet), so **make a backup now and then** from *More → Backup*. Found a bug or have an idea? [Open an issue](https://github.com/sirgijoe/squire-sack/issues/new/choose).
+
 Squire is a **free, open-source inventory and collection manager**. Catalog anything with photos, custom details and descriptions, browse it like a photo album, and export it straight into an online shop, a spreadsheet or a printable list.
 
 It started as a way to catalog 3,000+ ceramic slip-casting molds for [Blooming Lotus Pottery](https://bloominglotusstudio.com), and grew into a tool for any collection: trading cards, coins, stamps, dolls, comics, vinyl, die-cast, books, antiques, jewelry, shop stock, and anything else you build a template for.

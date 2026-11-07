@@ -1,0 +1,28 @@
+name: 🐞 Bug report
+description: Something in Squire isn't working right
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: Device and browser
+      placeholder: e.g. iPhone 16 Pro, Safari (installed to home screen)
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Squire version
+      description: Shown under More → About
+      placeholder: e.g. 0.2.1
+  - type: textarea
+    id: extra
+    attributes:
+      label: Screenshots or anything else

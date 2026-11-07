@@ -204,3 +204,9 @@ dl.kv dd { margin: 0; word-break: break-word; }
   .items.grid { grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); }
   .edit-layout { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-items: start; }
 }
+
+/* Beta */
+.beta-pill { display: inline-block; font-size: 10px; font-weight: 700; letter-spacing: .06em; padding: 2px 6px; border-radius: 6px; background: var(--accent); color: #fff; vertical-align: middle; }
+.beta-note { position: relative; background: var(--surface-2); border: 1px solid var(--accent); border-radius: 12px; padding: 10px 44px 10px 12px; font-size: 14px; margin-bottom: 10px; }
+.beta-note a { margin-left: 4px; }
+.beta-note .icon-btn { position: absolute; top: 2px; right: 2px; font-size: 16px; color: var(--muted); }

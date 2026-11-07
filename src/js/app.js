@@ -6,7 +6,8 @@ import { processPhoto, blobUrl, forgetUrl } from './photos.js';
 import { esc, renderMarkdown, download, money, debounce } from './util.js';
 import * as ex from './export.js';
 
-export const VERSION = '0.2.0';
+export const VERSION = '0.2.1';
+const ISSUES = 'https://github.com/sirgijoe/squire-sack/issues/new/choose';
 
 // ---------------------------------------------------------------- state
 const S = {
@@ -107,7 +108,7 @@ const tplOf = (item) => S.tplById[item.templateId] || { id: item.templateId, nam
 // ---------------------------------------------------------------- chrome helpers
 function chrome({ title, back = false, nav = '', actions = [], switcher = false }) {
   const tEl = $('#title');
-  tEl.innerHTML = switcher ? `<button class="title-btn" id="sackBtn">${esc(title)} <span class="caret">▾</span></button>` : esc(title);
+  tEl.innerHTML = (switcher ? `<button class="title-btn" id="sackBtn">${esc(title)} <span class="caret">▾</span></button>` : esc(title)) + (switcher ? ' <span class="beta-pill">BETA</span>' : '');
   if (switcher) $('#sackBtn').onclick = openSackSwitcher;
   $('#backBtn').hidden = !back;
   const box = $('#topActions');
@@ -293,6 +294,8 @@ function renderSack() {
       <select id="groupSel" aria-label="Group">${[...GROUPS, ...fieldGroups].map(([k, l]) => `<option value="${k}" ${k === p.group ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>
       <button class="chip" id="layoutBtn">${layoutIcon}</button>
     </div>
+    ${S.prefs.betaSeen ? '' : `<div class="beta-note"><b>Squire is in beta.</b> Your Sack lives only on this device for now, so make a backup now and then (More → Backup).
+      <a href="${ISSUES}" target="_blank" rel="noopener">Report a bug</a><button class="icon-btn" id="betaX" aria-label="Dismiss">✕</button></div>`}
     <div class="crumbs" id="crumbs"></div>
     <div class="count" id="count"></div>
     <div id="album"></div>`;
@@ -304,6 +307,7 @@ function renderSack() {
     p.layout = { grid: 'list', list: 'cards', cards: 'grid' }[p.layout]; savePrefs(); renderSack();
   };
   $('#filterBtn').onclick = openFilterSheet;
+  $('#betaX')?.addEventListener('click', () => { S.prefs.betaSeen = true; savePrefs(); $('.beta-note')?.remove(); });
   renderAlbum();
 }
 
@@ -896,9 +900,10 @@ async function renderMore() {
       ${est ? `<dt>Space used</dt><dd>${mb(est.usage || 0)}${est.quota ? ` of ~${mb(est.quota)}` : ''}</dd>` : ''}
       <dt>Protected from cleanup</dt><dd>${persisted ? 'Yes' : 'No — install the app to protect your data'}</dd></dl></div>
     <div class="card"><h2>🛡 About Squire</h2>
-      <p><b>Squire: Knick Knack Sack</b> v${VERSION}<br>Keeper of your armor, shield, sword — and all your knick knacks.</p>
+      <p><b>Squire: Knick Knack Sack</b> v${VERSION} <span class="beta-pill dark">BETA</span><br>Keeper of your armor, shield, sword — and all your knick knacks.</p>
       <p class="small">Free and open source under the GNU GPL v3. Made by sirgijoe.<br>
-      <a href="https://github.com/sirgijoe/squire-sack" target="_blank" rel="noopener">github.com/sirgijoe/squire-sack</a> · <a href="https://sirgijoe.com" target="_blank" rel="noopener">sirgijoe.com</a></p></div>`;
+      <a href="https://github.com/sirgijoe/squire-sack" target="_blank" rel="noopener">github.com/sirgijoe/squire-sack</a> · <a href="https://sirgijoe.com" target="_blank" rel="noopener">sirgijoe.com</a></p>
+      <a class="btn block" href="${ISSUES}" target="_blank" rel="noopener">🐞 Report a bug / 💡 Suggest a feature</a></div>`;
 
   const scoped = () => ($('#scope')?.value === 'view' ? S.visible : S.items);
 
