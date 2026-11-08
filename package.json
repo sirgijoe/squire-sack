@@ -1,6 +1,6 @@
 {
   "name": "squire-sack",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "private": true,
   "description": "Squire: Knick Knack Sack — free, open-source inventory and collection manager",
   "license": "GPL-3.0-only",
@@ -8,6 +8,8 @@
   "repository": "github:sirgijoe/squire-sack",
   "scripts": {
     "serve": "npx --yes http-server src -p 8080 -c-1",
+    "home-base": "node tools/home-base.mjs",
+    "test": "node --test test/*.test.mjs",
     "tauri": "tauri",
     "desktop:dev": "tauri dev",
     "desktop:build": "tauri build",
@@ -21,5 +23,6 @@
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2"
-  }
+  },
+  "type": "module"
 }

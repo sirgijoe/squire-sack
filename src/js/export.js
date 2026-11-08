@@ -3,6 +3,11 @@ import * as db from './db.js';
 import { makeZip, readZip } from './zip.js';
 import { csv, renderMarkdown, slugify, today, esc, money } from './util.js';
 
+// How to get a full-size photo when this device only keeps the thumbnail (synced phones).
+// app.js points this at the home base; by default fall back to the thumbnail.
+let resolveFull = async (p) => p.full || p.thumb;
+export function setFullPhotoResolver(fn) { resolveFull = fn; }
+
 const fmtVal = (field, v) => {
   if (v == null || v === '') return '';
   if (field.type === 'yesno') return v ? 'Yes' : 'No';
@@ -41,7 +46,7 @@ export async function exportWoo(items, templatesById, opts) {
     const tpl = templatesById[item.templateId] || { fields: [] };
     const photos = await photosFor(item);
     const imgNames = photos.map((_, i) => imageName(item, i));
-    if (opts.includeImages) photos.forEach((p, i) => files.push({ name: 'images/' + imgNames[i], data: p.full }));
+    if (opts.includeImages) for (let i = 0; i < photos.length; i++) files.push({ name: 'images/' + imgNames[i], data: await resolveFull(photos[i]) });
 
     const attrs = [];
     for (const fld of tpl.fields) {
@@ -107,12 +112,16 @@ export async function exportCsv(items, templatesById) {
 
 // ---------- Full backup / restore ----------
 export async function exportBackup() {
-  const [templates, items, photos, meta] = await Promise.all(['templates', 'items', 'photos', 'meta'].map(db.getAll));
+  const [templates, items, allPhotos, allMeta] = await Promise.all(['templates', 'items', 'photos', 'meta'].map((n) => db.getAll(n)));
+  const meta = allMeta.filter((m) => !String(m.key).startsWith('sync:'));
+  const photos = allPhotos.filter((p) => !p.deleted && (p.full || p.thumb));
   const files = [];
-  const photoMeta = photos.map((p) => {
-    files.push({ name: `photos/${p.id}.jpg`, data: p.full }, { name: `thumbs/${p.id}.jpg`, data: p.thumb });
-    return { id: p.id, itemId: p.itemId, caption: p.caption || '', createdAt: p.createdAt, updatedAt: p.updatedAt };
-  });
+  const photoMeta = [];
+  for (const p of photos) {
+    const full = await resolveFull(p);
+    files.push({ name: `photos/${p.id}.jpg`, data: full }, { name: `thumbs/${p.id}.jpg`, data: p.thumb || full });
+    photoMeta.push({ id: p.id, itemId: p.itemId, caption: p.caption || '', createdAt: p.createdAt, updatedAt: p.updatedAt });
+  }
   const data = { app: 'squire', format: 1, exportedAt: new Date().toISOString(), templates, items, photos: photoMeta, meta };
   files.unshift({ name: 'squire.json', data: JSON.stringify(data) });
   return { blob: await makeZip(files), filename: `squire-backup-${today()}.zip` };
@@ -136,13 +145,16 @@ export async function importBackup(file, mode = 'merge') {
   };
   for (const t of data.templates || []) await keepNewer('templates', t);
   for (const it of data.items || []) await keepNewer('items', it);
-  for (const m of data.meta || []) { if (mode === 'replace' || !(await db.get('meta', m.key))) await db.put('meta', m); }
+  for (const m of data.meta || []) {
+    if (String(m.key).startsWith('sync:')) continue;
+    if (mode === 'replace' || !(await db.get('meta', m.key))) await db.put('meta', m);
+  }
   for (const pm of data.photos || []) {
     const full = zip.get(`photos/${pm.id}.jpg`);
     const thumb = zip.get(`thumbs/${pm.id}.jpg`);
     if (!full) continue;
     const cur = await db.get('photos', pm.id);
-    if (cur) continue;
+    if (cur && (cur.full || cur.deleted)) continue;
     await db.putRaw('photos', { ...pm, full: new Blob([full], { type: 'image/jpeg' }), thumb: new Blob([thumb || full], { type: 'image/jpeg' }) });
   }
   return { added, updated, items: (data.items || []).length };
@@ -168,7 +180,7 @@ export async function printList(items, templatesById, title = 'Squire inventory'
   for (const item of items) {
     const tpl = templatesById[item.templateId] || { fields: [], name: '' };
     const photo = item.photoIds?.[0] ? await db.get('photos', item.photoIds[0]) : null;
-    const img = photo ? await blobToDataUrl(photo.thumb) : '';
+    const img = photo?.thumb ? await blobToDataUrl(photo.thumb) : '';
     const details = tpl.fields.map((f) => [f.label, fmtVal(f, item.fields?.[f.key])]).filter(([, v]) => v !== '' && v != null)
       .map(([k, v]) => `<b>${esc(k)}:</b> ${esc(v)}`).join(' · ');
     const value = Number(item.price || 0) * Number(item.quantity ?? 1);

@@ -210,3 +210,15 @@ dl.kv dd { margin: 0; word-break: break-word; }
 .beta-note { position: relative; background: var(--surface-2); border: 1px solid var(--accent); border-radius: 12px; padding: 10px 44px 10px 12px; font-size: 14px; margin-bottom: 10px; }
 .beta-note a { margin-left: 4px; }
 .beta-note .icon-btn { position: absolute; top: 2px; right: 2px; font-size: 16px; color: var(--muted); }
+
+/* 0.3 — value history, pairing, CSV import */
+.value .spark { display: block; color: var(--primary); margin: 4px 0 8px; }
+.value .up { color: var(--primary); font-size: 13px; }
+.value .down { color: var(--danger); font-size: 13px; }
+.qrbox { display: flex; justify-content: center; margin: 8px 0; }
+.qrbox svg { max-width: 260px; height: auto; border-radius: 8px; }
+.paircode { font: 700 36px/1.2 ui-monospace, monospace; letter-spacing: 4px; text-align: center; margin: 6px 0; }
+.maprow { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.maprow:last-child { border-bottom: 0; }
+.maprow .nm { font-weight: 600; word-break: break-word; }
+.maprow select { max-width: 48%; }
