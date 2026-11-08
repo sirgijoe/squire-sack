@@ -12,6 +12,8 @@ It started as a way to catalog 3,000+ ceramic slip-casting molds for [Blooming L
 
 ## Get Squire
 
+📖 **Step-by-step install guide for every device: [INSTALL.md](INSTALL.md)**
+
 **Easiest — any phone, tablet or computer:** open **https://sirgijoe.github.io/squire-sack/**. On a phone, tap *Share → Add to Home Screen* (iPhone) or *⋮ → Install app* (Android). It works offline and costs nothing.
 
 **Apps** (free, from the [latest release](https://github.com/sirgijoe/squire-sack/releases)):

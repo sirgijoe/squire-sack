@@ -60,7 +60,7 @@ jobs:
         with:
           tagName: v__VERSION__
           releaseName: Squire v__VERSION__
-          releaseBody: 'Download the installer for your computer below. Phones: install the .apk on Android, or use the web app at https://sirgijoe.github.io/squire-sack/'
+          releaseBody: 'New to Squire? Follow the step-by-step guide: https://github.com/sirgijoe/squire-sack/blob/main/INSTALL.md — Windows: Squire_…_x64-setup.exe · Mac: Squire_…_aarch64.dmg (Apple chip) or _x64.dmg (Intel) · Android: Squire_…_android.apk · iPhone: use https://sirgijoe.github.io/squire-sack/'
           releaseDraft: true
           prerelease: true
           args: ${{ matrix.args }}
