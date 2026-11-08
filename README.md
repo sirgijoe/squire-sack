@@ -10,7 +10,22 @@ Squire is a **free, open-source inventory and collection manager**. Catalog anyt
 
 It started as a way to catalog 3,000+ ceramic slip-casting molds for [Blooming Lotus Pottery](https://bloominglotusstudio.com), and grew into a tool for any collection: trading cards, coins, stamps, dolls, comics, vinyl, die-cast, books, antiques, jewelry, shop stock, and anything else you build a template for.
 
-**Try it now:** https://sirgijoe.github.io/squire-sack/ (open on your phone, then *Add to Home Screen*)
+## Get Squire
+
+**Easiest — any phone, tablet or computer:** open **https://sirgijoe.github.io/squire-sack/**. On a phone, tap *Share → Add to Home Screen* (iPhone) or *⋮ → Install app* (Android). It works offline and costs nothing.
+
+**Apps** (free, from the [latest release](https://github.com/sirgijoe/squire-sack/releases)):
+
+| Device | Download | First launch |
+|---|---|---|
+| Windows | `Squire_…_x64-setup.exe` | If SmartScreen appears: *More info → Run anyway* |
+| Mac (Apple chip: M1, M2, …) | `Squire_…_aarch64.dmg` | Drag to Applications. If macOS blocks it: *System Settings → Privacy & Security → Open Anyway* |
+| Mac (Intel) | `Squire_…_x64.dmg` | Same as above |
+| Linux | `.AppImage` or `.deb` | — |
+| Android | `Squire_…_android.apk` | Allow "Install unknown apps" when asked |
+| iPhone / iPad | Use the web link above | An App Store version is planned |
+
+**Sync between your phone and computer** works with the desktop app plus the Android app (*More → Home base → Pair a phone*). iPhone sync is coming.
 
 ## Features
 
