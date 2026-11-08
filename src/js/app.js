@@ -3,10 +3,16 @@
 import * as db from './db.js';
 import { BUILTIN_TEMPLATES, CONDITIONS, FIELD_TYPES, slugKey } from './templates.js';
 import { processPhoto, blobUrl, forgetUrl } from './photos.js';
-import { esc, renderMarkdown, download, money, debounce } from './util.js';
+import { esc, renderMarkdown, money, debounce, parseCsv } from './util.js';
 import * as ex from './export.js';
+import { saveFile, openHtml, isTauri, isDesktopApp, invoke } from './platform.js';
+import { createSync } from './sync.js';
+import { recordPrice, historyHtml, collectionValueSeries, sparkline } from './value.js';
+import { labelSheet, LABEL_SIZES, parseLabelCode } from './labels.js';
+import { autoMap, rowsToItems, planImport, BASE_TARGETS } from './csvimport.js';
+import { qrSvg } from './qr.js';
 
-export const VERSION = '0.2.1';
+export const VERSION = '0.3.0';
 const ISSUES = 'https://github.com/sirgijoe/squire-sack/issues/new/choose';
 
 // ---------------------------------------------------------------- state
@@ -88,7 +94,7 @@ function editSack(id) {
     k.name = $('#sName', p).value.trim(); k.icon = $('#sIcon', p).value.trim() || '👜';
     if (!k.name) { toast('Give the Sack a name'); return; }
     const list = id ? S.sacks.map((x) => (x.id === k.id ? k : x)) : [...S.sacks, k];
-    await db.setMeta('sacks', list); S.sacks = list;
+    await db.setMeta('sacks', list); S.sacks = list; queueSync();
     if (!id) { S.prefs.sack = k.id; S.prefs.path = ''; savePrefs(); }
     closeSheet(); toast(id ? 'Sack saved' : `“${k.name}” created`);
     route();
@@ -175,6 +181,10 @@ async function route() {
       case 'templates': return renderTemplates();
       case 'template': return renderTemplateEditor(parts[1]);
       case 'more': return renderMore();
+      case 'sku': return openBySku(decodeURIComponent(parts.slice(1).join('/')));
+      case 'pair': return renderPair(query);
+      case 'import': return renderImport();
+      case 'sync': return renderSync();
       default: location.hash = '#/';
     }
   } catch (err) {
@@ -276,7 +286,7 @@ function activeFilterCount() {
 function renderSack() {
   const cs = currentSack();
   chrome({ title: cs ? `${cs.icon} ${cs.name}` : (S.sacks.length > 1 ? '🎒 All Sacks' : 'The Sack'), nav: 'sack', switcher: true,
-    actions: [{ icon: '⬇️', label: 'Export', onClick: () => (location.hash = '#/more') }] });
+    actions: [{ icon: '📷', label: 'Scan a label', onClick: openScanner }, { icon: '⬇️', label: 'Export', onClick: () => (location.hash = '#/more') }] });
   const p = S.prefs;
   const tpl = p.f.tpl ? S.tplById[p.f.tpl] : null;
   const fieldSorts = tpl ? tpl.fields.map((f) => [`f:${f.key}`, `Sort: ${f.label}`]) : [];
@@ -294,7 +304,7 @@ function renderSack() {
       <select id="groupSel" aria-label="Group">${[...GROUPS, ...fieldGroups].map(([k, l]) => `<option value="${k}" ${k === p.group ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>
       <button class="chip" id="layoutBtn">${layoutIcon}</button>
     </div>
-    ${S.prefs.betaSeen ? '' : `<div class="beta-note"><b>Squire is in beta.</b> Your Sack lives only on this device for now, so make a backup now and then (More → Backup).
+    ${S.prefs.betaSeen ? '' : `<div class="beta-note"><b>Squire is in beta.</b> Your Sack lives on this device unless you sync it with the desktop home base, so make a backup now and then (More → Backup).
       <a href="${ISSUES}" target="_blank" rel="noopener">Report a bug</a><button class="icon-btn" id="betaX" aria-label="Dismiss">✕</button></div>`}
     <div class="crumbs" id="crumbs"></div>
     <div class="count" id="count"></div>
@@ -383,7 +393,7 @@ function renderAlbum() {
     for (const en of entries) {
       if (!en.isIntersecting) continue;
       const img = en.target; thumbObserver.unobserve(img);
-      db.get('photos', img.dataset.pid).then((p) => { if (p) img.src = blobUrl('t:' + p.id, p.thumb); });
+      db.get('photos', img.dataset.pid).then((p) => { if (p && (p.thumb || p.full)) img.src = blobUrl('t:' + p.id, p.thumb || p.full); });
     }
   }, { rootMargin: '400px' });
   $$('img[data-pid]', album).forEach((i) => thumbObserver.observe(i));
@@ -453,7 +463,7 @@ async function renderItem(id) {
     title: it.name, back: true, nav: 'sack',
     actions: [{ icon: '✏️', label: 'Edit', onClick: () => (location.hash = `#/edit/${id}`) }],
   });
-  const photos = (await Promise.all((it.photoIds || []).map((pid) => db.get('photos', pid)))).filter(Boolean);
+  const photos = (await Promise.all((it.photoIds || []).map((pid) => db.get('photos', pid)))).filter((p) => p && !p.deleted && (p.full || p.thumb));
 
   const fmt = (f, v) => (f.type === 'yesno' ? (v ? 'Yes' : 'No') : f.type === 'currency' ? money(v) : f.type === 'rating' ? '★'.repeat(Number(v) || 0) : f.type === 'url' ? `<a href="${esc(v)}" target="_blank" rel="noopener">${esc(v)}</a>` : esc(v));
   const tplRows = t.fields.filter((f) => it.fields?.[f.key] !== '' && it.fields?.[f.key] != null)
@@ -467,17 +477,19 @@ async function renderItem(id) {
   ].filter(([, v]) => v !== '' && v != null).map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
 
   view.innerHTML = `
-    ${photos.length ? `<div class="gallery"><div class="track">${photos.map((p, i) => `<div class="slide" data-i="${i}"><img src="${blobUrl('f:' + p.id, p.full)}" alt="${esc(p.caption || it.name)}"></div>`).join('')}</div>
+    ${photos.length ? `<div class="gallery"><div class="track">${photos.map((p, i) => `<div class="slide" data-i="${i}">${photoImg(p, it.name)}</div>`).join('')}</div>
       ${photos.length > 1 ? `<div class="dots">${photos.map((_, i) => `<span class="${i ? '' : 'on'}"></span>`).join('')}</div>` : ''}</div>
       <div class="caption" id="cap">${esc(photos[0].caption || '')}</div>` : ''}
     <div class="card"><h2>${esc(it.name)}</h2><p class="muted small" style="margin:-4px 0 10px">${t.icon} ${esc(t.name)}</p>
       <dl class="kv">${tplRows}</dl></div>
     ${it.description ? `<div class="card desc"><h2>Description</h2>${renderMarkdown(it.description)}</div>` : ''}
+    ${historyHtml(it)}
     <div class="card"><dl class="kv">${base}</dl>
       <p class="muted small" style="margin:10px 0 0">Added ${new Date(it.createdAt).toLocaleDateString()} · Updated ${new Date(it.updatedAt).toLocaleDateString()}</p></div>
     <div class="row" style="margin-bottom:16px">
       <a class="btn primary grow" href="#/edit/${id}">✏️ Edit</a>
       <a class="btn grow" href="#/new?from=${id}">⧉ Add similar</a>
+      <button class="btn" id="lblBtn" title="Print a QR label">🏷</button>
       <button class="btn danger" id="delBtn">🗑 Delete</button>
     </div>`;
 
@@ -490,6 +502,7 @@ async function renderItem(id) {
     }, 60));
     track.onclick = (e) => { const s = e.target.closest('.slide'); if (s) openViewer(photos, +s.dataset.i); };
   }
+  $('#lblBtn').onclick = () => openLabelSheet([it]);
   $('#delBtn').onclick = async () => {
     if (!(await confirmSheet(`Delete “${it.name}” and its ${photos.length} photo(s)? This can't be undone.`, 'Delete', true))) return;
     await deleteItem(it);
@@ -499,11 +512,11 @@ async function renderItem(id) {
 }
 
 async function deleteItem(it) {
-  for (const pid of it.photoIds || []) { await db.del('photos', pid); forgetUrl('t:' + pid); forgetUrl('f:' + pid); }
-  await db.del('items', it.id);
-  // keep a tombstone so a future sync knows it was deleted
-  await db.put('meta', { key: 'deleted:' + it.id, value: Date.now() });
+  // tombstones (not hard deletes) so synced devices learn about the delete too
+  for (const pid of it.photoIds || []) { await db.softDelete('photos', pid, { itemId: it.id }); forgetUrl('t:' + pid); forgetUrl('f:' + pid); }
+  await db.softDelete('items', it.id, { sackId: it.sackId, templateId: it.templateId, createdAt: it.createdAt });
   await loadItems();
+  queueSync();
 }
 
 // ---------------------------------------------------------------- template picker for new items
@@ -530,7 +543,7 @@ async function renderEdit(id, query = new URLSearchParams()) {
     item = {
       id: db.uid(), sackId: S.prefs.sack || S.sacks[0]?.id || DEFAULT_SACK, templateId: tplId, name: '', sku: '', quantity: 1, condition: '', location: '', collection: '', cost: '', price: '',
       tags: [], listOnline: true, wooCategory: '', description: '', fields: {}, photoIds: [], createdAt: Date.now(),
-      ...(from ? { ...structuredClone(from), id: db.uid(), name: from.name + ' (copy)', sku: '', photoIds: [], createdAt: Date.now() } : {}),
+      ...(from ? { ...structuredClone(from), id: db.uid(), name: from.name + ' (copy)', sku: '', photoIds: [], priceHistory: [], createdAt: Date.now() } : {}),
       ...carry,
     };
   } else {
@@ -542,9 +555,10 @@ async function renderEdit(id, query = new URLSearchParams()) {
   const photos = [];
   for (const pid of item.photoIds || []) {
     const p = await db.get('photos', pid);
-    if (p) photos.push({ id: p.id, rec: null, thumbUrl: blobUrl('t:' + p.id, p.thumb), caption: p.caption || '', origCaption: p.caption || '' });
+    if (p && !p.deleted) photos.push({ id: p.id, rec: null, thumbUrl: blobUrl('t:' + p.id, p.thumb || p.full), caption: p.caption || '', origCaption: p.caption || '' });
   }
   const removed = [];
+  const origPrice = isNew ? '' : item.price;
   let dirty = false;
 
   chrome({ title: isNew ? 'New item' : 'Edit item', back: true, nav: isNew ? 'new' : 'sack' });
@@ -683,14 +697,16 @@ async function renderEdit(id, query = new URLSearchParams()) {
     collect();
     const t = tplOf(item);
     if (!item.sku) item.sku = await db.nextSku(t.skuPrefix || 'ITEM');
-    for (const pid of removed) { await db.del('photos', pid); forgetUrl('t:' + pid); forgetUrl('f:' + pid); }
+    for (const pid of removed) { await db.softDelete('photos', pid, { itemId: item.id }); forgetUrl('t:' + pid); forgetUrl('f:' + pid); }
     for (const p of photos) {
       if (p.rec) { p.rec.caption = p.caption; await db.put('photos', p.rec); }
       else if (p.caption !== p.origCaption) { const r = await db.get('photos', p.id); if (r) { r.caption = p.caption; await db.put('photos', r); } }
     }
     item.photoIds = photos.map((p) => p.id);
+    recordPrice(item, origPrice);
     await db.put('items', item);
     await loadItems();
+    queueSync();
     S.prefs.lastTpl = item.templateId; savePrefs();
     dirty = false;
     if (next) {
@@ -790,7 +806,7 @@ async function renderTemplateEditor(id) {
   if (!isNew && !src) { location.hash = '#/templates'; return; }
 
   if (src?.builtin) {
-    chrome({ title: src.name, back: true, nav: 'templates', actions: [{ icon: '⬇️', label: 'Export template', onClick: () => { const r = ex.exportTemplate(src); download(r.blob, r.filename); } }] });
+    chrome({ title: src.name, back: true, nav: 'templates', actions: [{ icon: '⬇️', label: 'Export template', onClick: () => { const r = ex.exportTemplate(src); saveFile(r.blob, r.filename); } }] });
     view.innerHTML = `<div class="card"><h2>${src.icon} ${esc(src.name)}</h2><p class="muted small">Built-in template · SKU prefix ${esc(src.skuPrefix)}</p>
       <dl class="kv">${src.fields.map((f) => `<dt>${esc(f.label)}</dt><dd>${esc(FIELD_TYPES.find(([k]) => k === f.type)?.[1] || f.type)}${f.options ? ` <span class="muted small">(${esc(f.options.join(', '))})</span>` : ''}</dd>`).join('')}</dl></div>
       <p class="muted">Built-in templates can't be changed, but you can make your own copy and edit that.</p>
@@ -857,16 +873,16 @@ async function renderTemplateEditor(id) {
         if (f.type !== 'select') delete f.options;
       }
       if (!t.skuPrefix) t.skuPrefix = t.name.replace(/[^A-Za-z0-9]/g, '').slice(0, 4).toUpperCase() || 'ITEM';
-      await db.put('templates', t); await loadTemplates();
+      await db.put('templates', t); await loadTemplates(); queueSync();
       toast('Template saved');
       location.replace('#/templates');
     };
-    $('#tExp')?.addEventListener('click', () => { sync(); const r = ex.exportTemplate(t); download(r.blob, r.filename); });
+    $('#tExp')?.addEventListener('click', () => { sync(); const r = ex.exportTemplate(t); saveFile(r.blob, r.filename); });
     $('#tDel')?.addEventListener('click', async () => {
       const n = S.items.filter((i) => i.templateId === t.id).length;
       if (n) { toast(`${n} item(s) still use this template. Move or delete them first.`, 3500); return; }
       if (!(await confirmSheet(`Delete template “${t.name}”?`, 'Delete', true))) return;
-      await db.del('templates', t.id); await loadTemplates();
+      await db.softDelete('templates', t.id); await loadTemplates(); queueSync();
       location.replace('#/templates');
     });
   };
@@ -891,7 +907,13 @@ async function renderMore() {
         <button class="btn primary" id="xWoo">🛒 WooCommerce (shop import)</button>
         <button class="btn" id="xCsv">📊 Spreadsheet (CSV — Excel, Google Sheets, eBay, Shopify)</button>
         <button class="btn" id="xPrint">🖨 Printable list / PDF</button>
+        <button class="btn" id="xLabels">🏷 Shelf labels with QR codes</button>
       </div></div>
+    <div class="card"><h2>⬆ Import</h2>
+      <p class="muted small">Bring in a spreadsheet (.csv) — from Excel, Google Sheets, another app, or a Squire export. You choose which column goes where.</p>
+      <a class="btn block" href="#/import">📊 Import from CSV</a></div>
+    <div class="card"><h2>🔄 ${isDesktopApp() ? 'Home base' : 'Sync with your computer'}</h2>${syncCardHtml()}</div>
+    ${valueCardHtml()}
     <div class="card"><h2>💾 Backup</h2>
       <p class="muted small">A backup holds every item, template and full-size photo in one .zip. Keep a copy off your phone.</p>
       <div style="display:grid;gap:8px"><button class="btn primary" id="xBak">💾 Make a backup</button><button class="btn" id="iBak">♻ Restore from backup</button></div></div>
@@ -924,18 +946,18 @@ async function renderMore() {
       await db.setMeta('wooOpts', opts);
       closeSheet(); toast('Building export…', 10000);
       const r = await ex.exportWoo(items, S.tplById, opts);
-      download(r.blob, r.filename); toast('Export ready');
+      await saveFile(r.blob, r.filename); toast('Export ready');
     };
   };
-  $('#xCsv').onclick = async () => { const r = await ex.exportCsv(scoped(), S.tplById); download(r.blob, r.filename); };
+  $('#xCsv').onclick = async () => { const r = await ex.exportCsv(scoped(), S.tplById); await saveFile(r.blob, r.filename); };
   $('#xPrint').onclick = async () => {
     toast('Preparing list…');
     const blob = await ex.printList(scoped(), S.tplById, currentSack()?.name || 'Squire inventory');
-    const url = URL.createObjectURL(blob);
-    const w = window.open(url, '_blank');
-    if (!w) download(blob, 'squire-inventory.html');
+    await openHtml(blob, 'squire-inventory.html');
   };
-  $('#xBak').onclick = async () => { toast('Packing backup…', 10000); const r = await ex.exportBackup(); download(r.blob, r.filename); toast('Backup ready'); };
+  $('#xLabels').onclick = () => openLabelSheet(scoped());
+  $('#syncGo')?.addEventListener('click', () => (location.hash = '#/sync'));
+  $('#xBak').onclick = async () => { toast('Packing backup…', 10000); const r = await ex.exportBackup(); await saveFile(r.blob, r.filename); toast('Backup ready'); };
   $('#iBak').onclick = async () => {
     const [file] = await pickFile('.zip,application/zip');
     if (!file) return;
@@ -947,12 +969,347 @@ async function renderMore() {
       closeSheet(); toast('Restoring…', 15000);
       try {
         const r = await ex.importBackup(file, m);
-        await loadTemplates(); await loadItems();
+        await loadTemplates(); await loadItems(); queueSync();
         toast(`Restored: ${r.added} added, ${r.updated} updated`);
         renderMore();
       } catch (err) { console.error(err); toast(err.message, 4000); }
     };
   };
+}
+
+// ---------------------------------------------------------------- photos that may live on the home base
+function fullSrc(p) {
+  if (p.full) return blobUrl('f:' + p.id, p.full);
+  if (S.syncCfg?.token) return `${S.syncCfg.url}/api/photo/${encodeURIComponent(p.id)}/full?t=${encodeURIComponent(S.syncCfg.token)}`;
+  return blobUrl('t:' + p.id, p.thumb);
+}
+function photoImg(p, alt) {
+  const thumb = p.thumb ? blobUrl('t:' + p.id, p.thumb) : '';
+  return `<img src="${esc(fullSrc(p))}" alt="${esc(p.caption || alt)}"${thumb ? ` data-fallback="${esc(thumb)}" onerror="this.onerror=null;this.src=this.dataset.fallback"` : ''}>`;
+}
+
+// ---------------------------------------------------------------- sync with the desktop home base
+const syncer = createSync({ db });
+ex.setFullPhotoResolver((p) => syncer.fullBlob(p));
+S.sync = { state: 'idle', msg: '', last: null };
+
+async function refreshSyncCfg() { S.syncCfg = await syncer.getConfig(); return S.syncCfg; }
+
+let syncTimer = null;
+function queueSync(ms = 4000) {
+  if (!S.syncCfg?.token) return;
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(() => runSync({ quiet: true }), ms);
+}
+
+async function runSync({ quiet = false } = {}) {
+  if (!S.syncCfg?.token) return null;
+  S.sync = { ...S.sync, state: 'running', msg: 'Syncing…' };
+  paintSyncStatus();
+  try {
+    const r = await syncer.syncNow((m) => { S.sync.msg = m; paintSyncStatus(); });
+    await refreshSyncCfg();
+    S.sync = { state: 'ok', msg: '', last: r };
+    if (r.received || r.downloaded) {
+      await loadTemplates(); await loadItems();
+      const h = location.hash || '#/';
+      if (h === '#/' || h === '#') renderSack();
+    }
+    if (!quiet) toast(`Synced · ${r.received} received${r.uploaded ? ` · ${r.uploaded} photos sent` : ''}${r.offloaded ? ` · ${r.offloaded} freed` : ''}`);
+    return r;
+  } catch (err) {
+    console.warn('Sync failed', err);
+    S.sync = { ...S.sync, state: 'error', msg: err.message };
+    if (!quiet) toast(err.message, 4000);
+    return null;
+  } finally { paintSyncStatus(); }
+}
+
+function syncStatusText() {
+  const c = S.syncCfg;
+  if (S.sync.state === 'running') return S.sync.msg || 'Syncing…';
+  if (S.sync.state === 'error') return '⚠️ ' + S.sync.msg;
+  if (c?.lastSync) return `Last synced ${new Date(c.lastSync).toLocaleString()}`;
+  return 'Not synced yet';
+}
+function paintSyncStatus() { $$('[data-sync-status]').forEach((el) => { el.textContent = syncStatusText(); }); }
+
+function syncCardHtml() {
+  if (isDesktopApp()) {
+    return S.homeBase
+      ? `<p class="small">Running as <b>${esc(S.homeBase.name)}</b>. ${S.homeBase.devices.length} phone${S.homeBase.devices.length === 1 ? '' : 's'} paired.</p>
+         <p class="muted small" data-sync-status>${esc(syncStatusText())}</p><button class="btn primary block" id="syncGo">🛡 Manage home base</button>`
+      : `<p class="muted small">Make this computer the home base for your Sack: phones on the same Wi-Fi sync to it, and full-size photos move here so phones keep only small copies.</p>
+         <button class="btn primary block" id="syncGo">🛡 Set up home base</button>`;
+  }
+  return S.syncCfg?.token
+    ? `<p class="small">Paired with <b>${esc(S.syncCfg.serverName || 'home base')}</b>.</p><p class="muted small" data-sync-status>${esc(syncStatusText())}</p>
+       <button class="btn primary block" id="syncGo">🔄 Sync settings</button>`
+    : `<p class="muted small">Pair this device with the Squire desktop app on your home Wi-Fi to share one Sack and move full-size photos off your phone.</p>
+       <button class="btn primary block" id="syncGo">🔗 Pair with home base</button>`;
+}
+
+function valueCardHtml() {
+  const items = S.prefs.sack ? S.items.filter((i) => (i.sackId || DEFAULT_SACK) === S.prefs.sack) : S.items;
+  const series = collectionValueSeries(items);
+  if (!series.length) return '';
+  const now = series[series.length - 1].total;
+  const first = series[0];
+  return `<div class="card value"><h2>📈 Collection value</h2>
+    <p><b style="font-size:20px">${money(now)}</b> <span class="muted small">${esc(currentSack()?.name || 'all Sacks')} · price × quantity</span></p>
+    ${sparkline(series.map((p) => ({ at: p.at, v: p.total })))}
+    ${series.length > 1 ? `<p class="muted small" style="margin:6px 0 0">Since ${new Date(first.at).toLocaleDateString()}: ${now >= first.total ? '▲' : '▼'} ${money(Math.abs(now - first.total))}</p>` : ''}</div>`;
+}
+
+// Desktop app: run the home base and keep this window synced with it.
+async function startHomeBase() {
+  const info = await invoke('home_base_start', {});
+  S.homeBase = info;
+  await syncer.connectLocal(info.localUrl, info.localToken, info.serverId, info.name);
+  await refreshSyncCfg();
+  await db.setMeta('homeBase:on', true);
+  return info;
+}
+
+async function renderSync() {
+  chrome({ title: isDesktopApp() ? 'Home base' : 'Sync', back: true, nav: 'more' });
+  if (isDesktopApp()) return renderHomeBase();
+  const c = await refreshSyncCfg();
+  if (!c?.token) return renderPair(new URLSearchParams());
+  view.innerHTML = `<div class="card"><h2>🔄 Synced with ${esc(c.serverName || 'home base')}</h2>
+      <dl class="kv"><dt>Address</dt><dd>${esc(c.url)}</dd><dt>This device</dt><dd>${esc(c.deviceName || '')}</dd><dt>Status</dt><dd data-sync-status>${esc(syncStatusText())}</dd></dl>
+      <button class="btn primary block" id="sNow" style="margin-top:10px">🔄 Sync now</button></div>
+    <div class="card"><h2>📷 Photos</h2>
+      <label class="switch"><input type="checkbox" id="sOff" ${c.offload ? 'checked' : ''}> Move full-size photos to the home base</label>
+      <p class="muted small" style="margin:6px 0 0">When on, this device keeps small copies after the home base has the originals. Full-size photos load from the home base when you're on the same Wi-Fi, and exports fetch them from there.</p></div>
+    <button class="btn danger block" id="sUnpair">Unpair this device</button>`;
+  $('#sNow').onclick = () => runSync();
+  $('#sOff').onchange = async (e) => { await syncer.setConfig({ ...(await syncer.getConfig()), offload: e.target.checked }); await refreshSyncCfg(); toast(e.target.checked ? 'Photos will move on the next sync' : 'Full-size photos stay on this device'); };
+  $('#sUnpair').onclick = async () => {
+    if (!(await confirmSheet('Unpair from the home base? Your items stay on this device. Photos that were moved off it stay on the home base.', 'Unpair', true))) return;
+    await syncer.unpair(); await refreshSyncCfg(); toast('Unpaired'); location.hash = '#/more';
+  };
+}
+
+async function renderHomeBase() {
+  const on = await db.getMeta('homeBase:on', false);
+  if (!S.homeBase && on) { try { await startHomeBase(); } catch (err) { toast(err.message, 4000); } }
+  if (!S.homeBase) {
+    view.innerHTML = `<div class="card"><h2>🛡 Make this computer the home base</h2>
+      <p>Phones and tablets on your home Wi-Fi pair with this computer and sync the Sack with it. Full-size photos are kept here, in Squire's app data folder, so phones only need small copies.</p>
+      <p class="muted small">Squire will listen on your home network (port 7878). Your computer may ask whether to allow that — say yes for private/home networks. Nothing goes to the internet.</p>
+      <button class="btn primary block" id="hbOn">Start the home base</button></div>`;
+    $('#hbOn').onclick = async () => { try { await startHomeBase(); await runSync({ quiet: true }); renderHomeBase(); } catch (err) { toast(err.message, 5000); } };
+    return;
+  }
+  const hb = S.homeBase = (await invoke('home_base_info')) || S.homeBase;
+  const addr = hb.urls[0] || '';
+  view.innerHTML = `<div class="card"><h2>🛡 ${esc(hb.name)} <span class="badge">running</span></h2>
+      <dl class="kv"><dt>Phones open</dt><dd>${addr ? esc(addr) : '<span class="muted">No network found — connect to Wi-Fi</span>'}</dd>
+      <dt>Photos kept in</dt><dd class="small">${esc(hb.dataDir)}</dd><dt>This window</dt><dd data-sync-status>${esc(syncStatusText())}</dd></dl>
+      <div class="row" style="margin-top:10px"><button class="btn primary grow" id="hbPair">📱 Pair a phone</button><button class="btn grow" id="hbSync">🔄 Sync now</button></div></div>
+    <div class="card"><h2>📱 Paired devices</h2>${hb.devices.length ? `<div class="tpl-list">${hb.devices.map((d) => `<div class="tile"><span class="ico">📱</span>
+      <div class="grow"><div class="nm">${esc(d.name)}</div><div class="sub">Last seen ${new Date(d.lastSeen).toLocaleString()}</div></div>
+      <button class="btn" data-forget="${esc(d.id)}">Forget</button></div>`).join('')}</div>` : '<p class="muted small">None yet. Tap “Pair a phone”.</p>'}</div>
+    <div class="card"><h2>⚙️ Settings</h2>
+      <label class="field"><span>Home base name</span><input type="text" id="hbName" value="${esc(hb.name)}"></label>
+      <button class="btn danger block" id="hbOff">Stop the home base</button></div>`;
+  $('#hbSync').onclick = () => runSync();
+  $('#hbName').onchange = async (e) => { await invoke('home_base_rename', { name: e.target.value }); S.homeBase = await invoke('home_base_info'); toast('Renamed'); };
+  $('#hbOff').onclick = async () => { await invoke('home_base_stop'); await db.setMeta('homeBase:on', false); S.homeBase = null; toast('Home base stopped'); renderHomeBase(); };
+  view.onclick = async (e) => {
+    const f = e.target.closest('[data-forget]');
+    if (!f) return;
+    if (!(await confirmSheet('Forget this device? It will need to pair again to sync.', 'Forget', true))) return;
+    await invoke('home_base_forget', { id: f.dataset.forget }); renderHomeBase();
+  };
+  $('#hbPair').onclick = async () => {
+    const code = await invoke('home_base_pair_code');
+    const link = addr ? `${addr}/#/pair?code=${code}` : '';
+    const p = openSheet(`<h2>📱 Pair a phone</h2>
+      <p>On the phone (same Wi-Fi), point the camera at this code:</p>
+      ${link ? `<div class="qrbox">${qrSvg(link, { px: 5 })}</div>` : ''}
+      <p class="muted small">Or open <b>${esc(addr || 'this computer’s address')}</b> in the phone's browser — or in the Squire app tap More → Sync → Pair — and enter:</p>
+      <p class="paircode">${code.slice(0, 3)} ${code.slice(3)}</p>
+      <p class="muted small">The code works once, for 10 minutes.</p>
+      <button class="btn block" id="pDone">Done</button>`);
+    $('#pDone', p).onclick = () => { closeSheet(); renderHomeBase(); };
+    // refresh the device list when the phone pairs
+    const before = hb.devices.length;
+    const poll = setInterval(async () => {
+      if ($('#sheet').hidden) { clearInterval(poll); return; }
+      const now = await invoke('home_base_info').catch(() => null);
+      if (now && now.devices.length > before) { clearInterval(poll); closeSheet(); toast(`Paired “${now.devices[now.devices.length - 1].name}”`); renderHomeBase(); }
+    }, 2000);
+  };
+}
+
+async function renderPair(query) {
+  chrome({ title: 'Pair with home base', back: true, nav: 'more' });
+  if (isDesktopApp()) { location.replace('#/sync'); return; }
+  let server = query.get('server') || '';
+  // opened from the home base itself (http://<computer>:7878/#/pair?code=…)
+  if (!server && /^http:/.test(location.protocol)) { try { await syncer.hello(location.origin); server = location.origin; } catch { /* not a home base */ } }
+  const code = query.get('code') || '';
+  const mixed = location.protocol === 'https:' && /^http:/.test(server || 'http:') && !/^http:\/\/(localhost|127\.)/.test(server);
+  const guessName = /iPhone/.test(navigator.userAgent) ? 'iPhone' : /iPad/.test(navigator.userAgent) ? 'iPad' : /Android/.test(navigator.userAgent) ? 'Android phone' : 'This device';
+  view.innerHTML = `<div class="card"><h2>🔗 Pair with your home base</h2>
+      <p class="small">On your computer, open the Squire desktop app → More → Home base → <b>Pair a phone</b>.</p>
+      ${'BarcodeDetector' in window ? '<button class="btn primary block" id="pScan" style="margin-bottom:12px">📷 Scan the code on the computer</button>' : ''}
+      <label class="field"><span>Home base address</span><input type="url" id="pUrl" value="${esc(server)}" placeholder="http://192.168.1.20:7878" inputmode="url"></label>
+      <label class="field"><span>Pairing code</span><input type="text" id="pCode" value="${esc(code)}" inputmode="numeric" maxlength="7" placeholder="123 456"></label>
+      <label class="field"><span>Name for this device</span><input type="text" id="pName" value="${esc(guessName)}"></label>
+      <label class="switch"><input type="checkbox" id="pOff" checked> Move full-size photos to the home base</label>
+      <button class="btn primary block" id="pGo" style="margin-top:10px">Pair</button></div>
+    ${mixed ? `<div class="card"><p class="small">⚠️ Browsers don't let a secure (https) page talk to a computer on your Wi-Fi. If pairing fails, open <b>${esc(server || 'the home base address')}</b> in this phone's browser instead — it's the same Squire app, served by your computer — and pair from there.</p></div>` : ''}`;
+  $('#pScan')?.addEventListener('click', openScanner);
+  $('#pGo').onclick = async () => {
+    const url = $('#pUrl').value.trim(), c = $('#pCode').value.trim();
+    if (!url || !c) { toast('Enter the address and the code'); return; }
+    $('#pGo').disabled = true; $('#pGo').textContent = 'Pairing…';
+    try {
+      await syncer.hello(url);
+      await syncer.pair(url, c, $('#pName').value.trim() || guessName, { offload: $('#pOff').checked });
+      await refreshSyncCfg();
+      toast('Paired! Syncing…');
+      location.replace('#/sync');
+      await runSync();
+    } catch (err) {
+      toast(err.message, 5000);
+      $('#pGo').disabled = false; $('#pGo').textContent = 'Pair';
+    }
+  };
+  if (server && code && query.get('auto') !== '0') $('#pCode').focus();
+}
+
+// ---------------------------------------------------------------- QR labels + scanner
+function openLabelSheet(items) {
+  if (!items.length) { toast('Nothing to label'); return; }
+  const noSku = items.filter((i) => !i.sku).length;
+  const p = openSheet(`<h2>🏷 Shelf labels</h2>
+    <p class="muted small">${items.length} label${items.length === 1 ? '' : 's'}. Each QR code opens the item in Squire — scan it with the 📷 button on the Sack, or the phone's camera.${noSku ? ` ${noSku} item(s) have no SKU and will use their internal id.` : ''}</p>
+    <label class="field"><span>Label size</span><select id="lSize">${Object.entries(LABEL_SIZES).map(([k, v]) => `<option value="${k}" ${k === (S.prefs.labelSize || 'small') ? 'selected' : ''}>${esc(v.name)}</option>`).join('')}</select></label>
+    <label class="switch"><input type="checkbox" id="lPrice" ${S.prefs.labelPrice ? 'checked' : ''}> Show price</label>
+    <div class="row"><button class="btn grow" id="lCancel">Cancel</button><button class="btn primary grow" id="lGo">Make labels</button></div>`);
+  $('#lCancel', p).onclick = closeSheet;
+  $('#lGo', p).onclick = async () => {
+    S.prefs.labelSize = $('#lSize', p).value; S.prefs.labelPrice = $('#lPrice', p).checked; savePrefs();
+    closeSheet();
+    const blob = labelSheet(items, { size: S.prefs.labelSize, showPrice: S.prefs.labelPrice, appUrl: location.href, title: `${currentSack()?.name || 'Squire'} labels` });
+    await openHtml(blob, 'squire-labels.html');
+  };
+}
+
+function handleScanned(text) {
+  const t = String(text || '').trim();
+  const pair = t.match(/^(https?:\/\/[^/#?]+)\/?#\/pair\?(.*)$/);
+  if (pair) { const q = new URLSearchParams(pair[2]); q.set('server', pair[1]); location.hash = '#/pair?' + q.toString(); return; }
+  const sku = parseLabelCode(t);
+  if (sku) location.hash = '#/sku/' + encodeURIComponent(sku);
+  else toast("That code isn't a Squire label");
+}
+
+async function openScanner() {
+  const canDetect = 'BarcodeDetector' in window;
+  const p = openSheet(`<h2>📷 Scan a label</h2>
+    ${canDetect ? '<video id="scanVid" playsinline muted style="width:100%;border-radius:12px;background:#000;aspect-ratio:4/3;object-fit:cover"></video>' : '<p class="muted small">This browser can’t scan codes itself. Use the phone’s camera app on the label — it opens Squire — or type the SKU:</p>'}
+    <div class="row" style="margin-top:10px"><input type="text" id="scanSku" class="grow" placeholder="Type a SKU, e.g. MOLD-0001" style="flex:1"><button class="btn primary" id="scanGo">Go</button></div>
+    <button class="btn block" id="scanClose" style="margin-top:10px">Close</button>`);
+  let stream = null, timer = null;
+  const stop = () => { clearInterval(timer); stream?.getTracks().forEach((t) => t.stop()); };
+  const done = (text) => { stop(); closeSheet(); handleScanned(text); };
+  $('#scanClose', p).onclick = () => { stop(); closeSheet(); };
+  $('#scanGo', p).onclick = () => { const v = $('#scanSku', p).value.trim(); if (v) done(v); };
+  $('#scanSku', p).onkeydown = (e) => { if (e.key === 'Enter') $('#scanGo', p).click(); };
+  const sheet = $('#sheet');
+  const prevClick = sheet.onclick;
+  sheet.onclick = (e) => { if (e.target === sheet) stop(); prevClick?.(e); };
+  if (!canDetect) return;
+  try {
+    const det = new window.BarcodeDetector({ formats: ['qr_code'] });
+    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+    const vid = $('#scanVid', p);
+    if (!vid) { stop(); return; }
+    vid.srcObject = stream; await vid.play();
+    timer = setInterval(async () => {
+      if ($('#sheet').hidden) { stop(); return; }
+      try { const [hit] = await det.detect(vid); if (hit?.rawValue) done(hit.rawValue); } catch { /* keep trying */ }
+    }, 300);
+  } catch (err) {
+    console.warn(err);
+    const vid = $('#scanVid', p); if (vid) vid.replaceWith(Object.assign(document.createElement('p'), { className: 'muted small', textContent: 'Camera not available. Type the SKU instead.' }));
+  }
+}
+
+async function openBySku(code) {
+  const c = String(code || '').trim().toLowerCase();
+  const it = S.items.find((i) => (i.sku || '').toLowerCase() === c) || S.items.find((i) => i.id === code);
+  if (it) { location.replace(`#/item/${it.id}`); return; }
+  chrome({ title: 'Not found', back: true, nav: 'sack' });
+  view.innerHTML = `<div class="empty"><div class="big">🔍</div><h2>${esc(code)}</h2><p>No item with that SKU on this device.${S.syncCfg?.token ? ' Try syncing first.' : ''}</p>
+    ${S.syncCfg?.token ? '<button class="btn primary" id="nfSync">🔄 Sync now</button>' : ''} <a class="btn" href="#/">Back to the Sack</a></div>`;
+  $('#nfSync')?.addEventListener('click', async () => { await runSync(); openBySku(code); });
+}
+
+// ---------------------------------------------------------------- CSV import
+async function renderImport() {
+  chrome({ title: 'Import CSV', back: true, nav: 'more' });
+  view.innerHTML = `<div class="card"><h2>📊 Import from a spreadsheet</h2>
+    <p class="small">Save your spreadsheet as <b>CSV</b> (Excel: File → Save As → CSV; Google Sheets: File → Download → CSV), then pick it here. The first row should be column names.</p>
+    <button class="btn primary block" id="iPick">Choose a .csv file</button></div>`;
+  $('#iPick').onclick = async () => {
+    const [file] = await pickFile('.csv,text/csv,text/plain');
+    if (!file) return;
+    const rows = parseCsv(await file.text());
+    if (rows.length < 2) { toast('That file has no rows to import'); return; }
+    renderImportMapping(file.name, rows);
+  };
+}
+
+function renderImportMapping(fileName, rows) {
+  const [header, ...body] = rows;
+  // pick the template whose fields match the most column names
+  const norm = (x) => String(x).trim().toLowerCase();
+  const score = (t) => header.filter((h) => t.fields.some((f) => norm(f.label) === norm(h))).length;
+  let tpl = S.templates.slice().sort((a, b) => score(b) - score(a))[0];
+  if (!score(tpl)) tpl = S.tplById[S.prefs.lastTpl] || S.templates.find((t) => t.id === 'tpl-general') || S.templates[0];
+  let mapping = autoMap(header, tpl, S.templates);
+  const sackId = S.prefs.sack || S.sacks[0]?.id || DEFAULT_SACK;
+
+  const draw = () => {
+    const targets = [['', '— skip —'], ['_template', 'Template (by name)'], ...BASE_TARGETS.map(([k, l]) => [k, l]), ...tpl.fields.map((f) => ['fl:' + f.label, `${tpl.icon} ${f.label}`]),
+      ...mapping.filter((m) => m.startsWith('fl:') && !tpl.fields.some((f) => 'fl:' + f.label === m)).map((m) => [m, `${m.slice(3)} (other template)`])];
+    const sample = (i) => body.slice(0, 3).map((r) => r[i]).filter(Boolean).join(' · ');
+    view.innerHTML = `<div class="card"><h2>📊 ${esc(fileName)}</h2><p class="muted small">${body.length} rows</p>
+        <label class="field"><span>Template for these items</span><select id="iTpl">${S.templates.map((t) => `<option value="${t.id}" ${t.id === tpl.id ? 'selected' : ''}>${t.icon} ${esc(t.name)}</option>`).join('')}</select></label>
+        ${S.sacks.length > 1 ? `<label class="field"><span>Put them in</span><select id="iSack">${S.sacks.map((k) => `<option value="${esc(k.id)}" ${k.id === sackId ? 'selected' : ''}>${esc(k.icon)} ${esc(k.name)}</option>`).join('')}</select></label>` : ''}
+        <label class="switch"><input type="checkbox" id="iUpd" checked> Update items that already have the same SKU</label></div>
+      <div class="card"><h2>Columns</h2><p class="muted small" style="margin-top:-4px">Choose where each column goes.</p>
+        ${header.map((h, i) => `<div class="maprow"><div class="grow"><div class="nm">${esc(h || `Column ${i + 1}`)}</div><div class="sub muted small">${esc(sample(i).slice(0, 80))}</div></div>
+          <select data-col="${i}">${targets.map(([k, l]) => `<option value="${esc(k)}" ${k === mapping[i] ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></div>`).join('')}</div>
+      <div class="savebar"><a class="btn" href="#/more">Cancel</a><button class="btn primary" id="iGo">Import ${body.length} rows</button></div>`;
+    $('#iTpl').onchange = (e) => { tpl = S.tplById[e.target.value]; mapping = autoMap(header, tpl, S.templates).map((m, i) => (m || (mapping[i] && !mapping[i].startsWith('fl:') ? mapping[i] : ''))); draw(); };
+    $$('[data-col]').forEach((sel) => (sel.onchange = () => { mapping[+sel.dataset.col] = sel.value; }));
+    $('#iGo').onclick = async () => {
+      if (!mapping.some(Boolean)) { toast('Choose at least one column to import'); return; }
+      const target = $('#iSack')?.value || sackId;
+      const { items, skipped } = rowsToItems(body, mapping, tpl, S.templates);
+      const { creates, updates } = planImport(items, S.items, { updateBySku: $('#iUpd').checked });
+      $('#iGo').disabled = true; $('#iGo').textContent = 'Importing…';
+      for (const u of updates) { await db.put('items', u); }
+      for (const c of creates) {
+        const t = S.tplById[c.templateId] || tpl;
+        const rec = { id: db.uid(), sackId: target, name: '', sku: '', quantity: 1, condition: '', location: '', collection: '', cost: '', price: '', tags: [], listOnline: true, wooCategory: '', description: '', photoIds: [], createdAt: Date.now(), ...c };
+        if (!rec.sku) rec.sku = await db.nextSku(t.skuPrefix || 'ITEM');
+        recordPrice(rec, '');
+        await db.put('items', rec);
+      }
+      await loadItems(); queueSync(1000);
+      toast(`Imported: ${creates.length} new, ${updates.length} updated${skipped ? `, ${skipped} empty rows skipped` : ''}`, 4000);
+      location.hash = '#/';
+    };
+  };
+  draw();
 }
 
 // ---------------------------------------------------------------- fullscreen photo viewer (swipe + pinch zoom)
@@ -968,7 +1325,8 @@ function openViewer(photos, index) {
   const show = (i) => {
     st.i = (i + photos.length) % photos.length; st.scale = 1; st.x = st.y = st.swipeX = 0;
     const p = photos[st.i];
-    img.src = blobUrl('f:' + p.id, p.full);
+    img.src = fullSrc(p);
+    img.onerror = () => { img.onerror = null; if (p.thumb) img.src = blobUrl('t:' + p.id, p.thumb); };
     $('.vcap', v).textContent = `${p.caption || ''}${photos.length > 1 ? `  (${st.i + 1}/${photos.length})` : ''}`;
     apply();
   };
@@ -1029,12 +1387,17 @@ function closeViewer() {
 async function boot() {
   await loadTemplates();
   await loadItems();
+  await refreshSyncCfg();
   db.requestPersistence();
   window.addEventListener('hashchange', () => { window.onbeforeunload = null; });
-  const isTauri = !!(window.__TAURI_INTERNALS__ || window.__TAURI__);
-  if ('serviceWorker' in navigator && !isTauri && /^https?:$/.test(location.protocol)) {
+  if ('serviceWorker' in navigator && !isTauri() && /^https?:$/.test(location.protocol)) {
     navigator.serviceWorker.register('sw.js').catch((e) => console.warn('SW not registered', e));
   }
   route();
+  if (isDesktopApp() && (await db.getMeta('homeBase:on', false))) {
+    try { await startHomeBase(); } catch (err) { console.warn('Home base did not start', err); }
+  }
+  if (S.syncCfg?.token) runSync({ quiet: true });
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') queueSync(1500); });
 }
 boot();

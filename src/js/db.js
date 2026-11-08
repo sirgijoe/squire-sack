@@ -49,7 +49,7 @@ async function store(name, mode = 'readonly') {
 export async function getAll(name) { return wrap((await store(name)).getAll()); }
 export async function get(name, id) { return wrap((await store(name)).get(id)); }
 export async function put(name, rec) {
-  if (name !== 'meta') rec.updatedAt = Date.now();
+  rec.updatedAt = Date.now();
   await wrap((await store(name, 'readwrite')).put(rec));
   return rec;
 }
@@ -59,6 +59,10 @@ export async function putRaw(name, rec) {
   return rec;
 }
 export async function del(name, id) { return wrap((await store(name, 'readwrite')).delete(id)); }
+// Mark a record deleted but keep a small tombstone, so sync can tell other devices about it.
+export async function softDelete(name, id, keep = {}) {
+  return put(name, { ...keep, id, deleted: true });
+}
 export async function byIndex(name, index, value) {
   return wrap((await store(name)).index(index).getAll(value));
 }

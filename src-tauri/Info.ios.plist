@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Merged into the iOS app's Info.plist by Tauri. Lets Squire sync with the desktop home base
+     over the home network and use the camera for photos and scanning labels. -->
+<plist version="1.0">
+<dict>
+  <key>NSAppTransportSecurity</key>
+  <dict>
+    <key>NSAllowsLocalNetworking</key>
+    <true/>
+  </dict>
+  <key>NSLocalNetworkUsageDescription</key>
+  <string>Squire syncs your Sack with the Squire home base on your computer over your home Wi-Fi.</string>
+  <key>NSCameraUsageDescription</key>
+  <string>Squire uses the camera to photograph items and scan shelf labels.</string>
+  <key>NSPhotoLibraryUsageDescription</key>
+  <string>Squire lets you add photos of your items from your library.</string>
+</dict>
+</plist>

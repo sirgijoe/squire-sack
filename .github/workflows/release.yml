@@ -1,0 +1,121 @@
+# Builds installers when a version tag is pushed (e.g. `git tag v0.3.0 && git push --tags` —
+# the tag must match the version in src-tauri/tauri.conf.json),
+# and attaches them to a draft GitHub release you can review and publish.
+#   Windows: .msi + .exe   macOS: .dmg (Apple Silicon + Intel)   Linux: .AppImage + .deb   Android: .apk
+#
+# Android signing (optional): add these repository secrets to get a signed release APK —
+#   ANDROID_KEYSTORE_BASE64 (base64 of your .jks), ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD
+# Without them a debug-signed APK is built, which installs fine by side-loading.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            args: ''
+          - platform: ubuntu-22.04
+            args: ''
+          - platform: macos-latest
+            args: '--target aarch64-apple-darwin'
+          - platform: macos-latest
+            args: '--target x86_64-apple-darwin'
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ startsWith(matrix.platform, 'macos') && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+      - name: Linux libraries for Tauri
+        if: startsWith(matrix.platform, 'ubuntu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: npm install
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: v__VERSION__
+          releaseName: Squire v__VERSION__
+          releaseBody: 'Download the installer for your computer below. Phones: install the .apk on Android, or use the web app at https://sirgijoe.github.io/squire-sack/'
+          releaseDraft: true
+          prerelease: true
+          args: ${{ matrix.args }}
+
+  android:
+    needs: desktop
+    runs-on: ubuntu-latest
+    env:
+      NDK_VERSION: 27.0.12077973
+      HAS_KEY: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: android-actions/setup-android@v3
+      - name: Android NDK
+        run: sdkmanager --install "ndk;${NDK_VERSION}" "platforms;android-34" "build-tools;34.0.0"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: npm install
+      - name: Generate the Android project
+        run: |
+          export NDK_HOME="$ANDROID_HOME/ndk/$NDK_VERSION"
+          npx tauri android init --ci
+          # Squire talks to the desktop home base over plain HTTP on the home network.
+          node tools/android-cleartext.mjs
+      - name: Build APK
+        run: |
+          export NDK_HOME="$ANDROID_HOME/ndk/$NDK_VERSION"
+          if [ "$HAS_KEY" = "true" ]; then
+            npx tauri android build --apk
+          else
+            npx tauri android build --apk --debug
+          fi
+      - name: Sign APK
+        if: ${{ env.HAS_KEY == 'true' }}
+        run: |
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > release.jks
+          APK=$(find src-tauri/gen/android -name '*release-unsigned.apk' | head -1)
+          "$ANDROID_HOME/build-tools/34.0.0/zipalign" -f 4 "$APK" aligned.apk
+          "$ANDROID_HOME/build-tools/34.0.0/apksigner" sign --ks release.jks \
+            --ks-pass "pass:${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" \
+            --ks-key-alias "${{ secrets.ANDROID_KEY_ALIAS }}" \
+            --key-pass "pass:${{ secrets.ANDROID_KEY_PASSWORD }}" \
+            --out "$(dirname "$APK")/squire-release.apk" aligned.apk
+          rm "$APK" release.jks
+      - name: Attach APK to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          TAG="v$VERSION"
+          APK=$(find src-tauri/gen/android -name '*.apk' ! -name '*unsigned*' | head -1)
+          cp "$APK" "Squire_${VERSION}_android.apk"
+          gh release upload "$TAG" "Squire_${VERSION}_android.apk" --clobber
