@@ -12,12 +12,18 @@ on:
   push:
     tags: ['v*']
   workflow_dispatch:
+    inputs:
+      android_only:
+        description: Only rebuild the Android APK (desktop installers already in the release)
+        type: boolean
+        default: false
 
 permissions:
   contents: write
 
 jobs:
   desktop:
+    if: ${{ !inputs.android_only }}
     strategy:
       fail-fast: false
       matrix:
@@ -61,6 +67,7 @@ jobs:
 
   android:
     needs: desktop
+    if: ${{ !cancelled() && (needs.desktop.result == 'success' || inputs.android_only) }}
     runs-on: ubuntu-latest
     env:
       NDK_VERSION: 27.0.12077973
